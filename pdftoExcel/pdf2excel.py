@@ -1,20 +1,18 @@
 import re
 import pandas as pd
-from PyPDF2 import PdfReader
+import pdfplumber
 import sys
 import os
 
 # Function to extract data from the PDF
 def extract_data_from_pdf(pdf_path):
     print(f"Opening PDF file: {pdf_path}")
-    reader = PdfReader(pdf_path)
-    print(f"Successfully opened PDF. Number of pages: {len(reader.pages)}")
-    
     extracted_data = []
     raw_lines = []  # Store all non-empty lines
     current_section = None
     found_first_section = False  # Flag to track if we've found the first section
-    current_description = []
+    pending_item = None  # Store the current item being processed
+    pending_description_lines = []  # Store all text lines between items
     
     # Patterns for header and footer to ignore
     header_patterns = [
@@ -32,125 +30,144 @@ def extract_data_from_pdf(pdf_path):
     # Combine all patterns to ignore
     ignore_patterns = header_patterns + footer_patterns
     
-    # Regex patterns to identify cutoff and price lines
-    cutoff_pattern = r"^A\s*$"
-    price_pattern = r"^(\$[\d,]+(?:\.\d{2})?|Included|N/C|TBD)\s*$"
+    # Updated pattern to match item, cutoff, and price on the same line
+    # Format: <item text> A $price
+    item_line_pattern = r"^(.*?)\s+A\s+(\$[\d,]+(?:\.\d{2})?|Included|N/C|TBD)\s*$"
+    
+    def save_pending_item():
+        """Helper function to save the pending item with any accumulated description"""
+        nonlocal pending_item, pending_description_lines
+        if pending_item:
+            # If there are pending description lines, combine them
+            if pending_description_lines:
+                pending_item["Description"] = " ".join(pending_description_lines)
+            extracted_data.append(pending_item)
+            print(f"Saved item: {pending_item['Item']}")
+            # Reset pending data
+            pending_item = None
+            pending_description_lines = []
     
     print("Starting to process pages...")
-    for page_num, page in enumerate(reader.pages, 1):
-        print(f"Processing page {page_num}/{len(reader.pages)}")
-        text = page.extract_text()
-        lines = text.split("\n")
-        print(f"Found {len(lines)} lines in page {page_num}")
-        
-        # Filter out empty lines and store raw lines
-        non_empty_lines = []
-        for line in lines:
-            if line.strip():
-                raw_lines.append({
-                    "Page": page_num,
-                    "Line": line.strip()
-                })
-                non_empty_lines.append(line.strip())
-        
-        # Process lines
-        i = 0
-        while i < len(non_empty_lines):
-            line = non_empty_lines[i]
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_num, page in enumerate(pdf.pages, 1):
+            print(f"Processing page {page_num}/{len(pdf.pages)}")
             
-            # Skip header/footer lines
-            should_skip = False
-            for pattern in ignore_patterns:
-                if re.search(pattern, line):
-                    should_skip = True
-                    break
-            if should_skip:
-                i += 1
-                continue
+            # Extract words with their formatting
+            words = page.extract_words(keep_blank_chars=True)
             
-            # Debug output
-            print(f"\nProcessing line: {line}")
+            # Group words into lines
+            current_line = []
+            current_y = None
+            lines = []
             
-            # Check if this is a section heading (exclude 'A' and 'TBD')
-            if line.isupper() and line not in ["A", "TBD", "OPTION SELECTIONS", "7D"]:
-                if not found_first_section and line == "APPLIANCES":
-                    found_first_section = True
-                    current_section = line
-                    print(f"Found first section: {current_section}")
-                elif found_first_section:
-                    current_section = line
-                    print(f"Found section: {current_section}")
-                i += 1
-                continue
-            
-            # Skip all lines before the first section
-            if not found_first_section:
-                i += 1
-                continue
-            
-            # Check for item/cutoff/price pattern (3-line structure)
-            if i + 2 < len(non_empty_lines):
-                next_line = non_empty_lines[i + 1]
-                next_next_line = non_empty_lines[i + 2]
+            for word in words:
+                if current_y is None:
+                    current_y = word['top']
                 
-                if (re.match(cutoff_pattern, next_line) and 
-                    re.match(price_pattern, next_next_line)):
-                    # Found an item pattern
-                    if current_description:  # Save any pending description
-                        # Update the last item's description if it exists
-                        if extracted_data:
-                            extracted_data[-1]["Description"] = " ".join(current_description)
-                        current_description = []
-                    
-                    # Add the new item
-                    extracted_data.append({
-                        "Section": current_section,
-                        "Item": line,
-                        "Description": None,  # Will be updated when we find description lines
-                        "Unit Price": next_next_line,
-                        "Cut-Off": next_line
-                    })
-                    print(f"Found item: {line} with price {next_next_line}")
-                    i += 3  # Skip the cutoff and price lines
+                # If y position changes significantly, we're on a new line
+                if abs(word['top'] - current_y) > 2:  # threshold for new line
+                    if current_line:
+                        line_text = ' '.join(word['text'] for word in current_line)
+                        lines.append(line_text.strip())
+                    current_line = [word]
+                    current_y = word['top']
+                else:
+                    current_line.append(word)
+            
+            # Don't forget the last line
+            if current_line:
+                line_text = ' '.join(word['text'] for word in current_line)
+                lines.append(line_text.strip())
+            
+            # Process lines
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                
+                # Skip empty lines
+                if not line.strip():
+                    i += 1
                     continue
-            
-            # If we get here and we're past the first section, this is a description line
-            if found_first_section and not (line.isupper() and line not in ["A", "TBD"]):
-                current_description.append(line)
-                print(f"Added description line: {line}")
-            
-            i += 1
+                
+                # Store raw line
+                raw_lines.append({"Page": page_num, "Line": line})
+                
+                # Skip header/footer lines
+                should_skip = False
+                for pattern in ignore_patterns:
+                    if re.search(pattern, line):
+                        should_skip = True
+                        break
+                if should_skip:
+                    i += 1
+                    continue
+                
+                # Check if this is a section heading (exclude 'A' and 'TBD')
+                if line.isupper() and line not in ["A", "TBD", "OPTION SELECTIONS", "7D"]:
+                    if not found_first_section and line == "APPLIANCES":
+                        found_first_section = True
+                        current_section = line
+                        print(f"Found first section: {current_section}")
+                    elif found_first_section:
+                        # Save any pending item before starting new section
+                        save_pending_item()
+                        current_section = line
+                        print(f"Found section: {current_section}")
+                    i += 1
+                    continue
+                
+                # Skip all lines before the first section
+                if not found_first_section:
+                    i += 1
+                    continue
+                
+                # Check for item line pattern (item, cutoff, and price on same line)
+                match = re.match(item_line_pattern, line)
+                if match:
+                    # Save any pending item before starting new one
+                    save_pending_item()
+                    
+                    # Create new item from the matched components
+                    item_text, price = match.groups()
+                    pending_item = {
+                        "Section": current_section,
+                        "Item": item_text.strip(),
+                        "Description": None,
+                        "Unit Price": price.strip(),
+                        "Cut-Off": "A"
+                    }
+                    i += 1
+                    continue
+                
+                # If we get here, this is a text line between items
+                # Add it to pending description lines
+                pending_description_lines.append(line)
+                i += 1
     
-    # Don't forget to add any remaining description to the last item
-    if current_description and extracted_data:
-        extracted_data[-1]["Description"] = " ".join(current_description)
+    # Don't forget to save the last pending item
+    save_pending_item()
     
     print(f"Extraction complete. Found {len(extracted_data)} items total.")
     return extracted_data, raw_lines
 
 # Function to save data to Excel
 def save_to_excel(processed_data, raw_lines, output_path, debug_mode=False):
-    print(f"\nSaving data to Excel file: {output_path}")
+    print(f"Saving data to Excel file: {output_path}")
     
-    # Create Excel writer
-    with pd.ExcelWriter(output_path) as writer:
-        # Save processed data
-        if processed_data:
-            df_processed = pd.DataFrame(processed_data)
-            print("Processed DataFrame created successfully")
-            print(f"Processed columns: {', '.join(df_processed.columns)}")
-            df_processed.to_excel(writer, sheet_name='Processed Data', index=False)
-            print("Processed data written to Excel file")
-        else:
-            print("WARNING: No processed data to save!")
+    # Create a pandas DataFrame from the processed data
+    df = pd.DataFrame(processed_data)
+    
+    # Create Excel writer object
+    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        # Write processed data to the first sheet
+        df.to_excel(writer, sheet_name='Processed Data', index=False)
         
-        # Save raw lines only in debug mode
+        # If in debug mode, write raw lines to second sheet
         if debug_mode and raw_lines:
             df_raw = pd.DataFrame(raw_lines)
-            print("Raw lines DataFrame created successfully")
-            print(f"Raw columns: {', '.join(df_raw.columns)}")
             df_raw.to_excel(writer, sheet_name='Raw Lines', index=False)
-            print("Raw lines written to Excel file")
+    
+    print("Excel file saved successfully.")
 
 def print_usage():
     print("Usage: python pdf2excel.py <pdf_filename> [-debug]")
