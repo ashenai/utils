@@ -1,1 +1,9 @@
-
+This module reads a PDF file and comverts free form text into Excel sheet with columns and rows. 
+This utility is not a generic PDF to Excel reading utility but meant for a very specific PDF format. 
+The syntax for using the module is
+c:\Projects\> python pdf2execel.py <complete path to input PDF file> [-debug]
+the optional -debug option when used prints the input lines as-is into a separate sheet called 'Raw Lines'. The processed information is written to a different sheet called 'Processed Data'
+the pdf2excel.config file contains the patterns used in PDF parsing. The patterns are:
+*   HEADER and FOOTER patterns: are patterns of headers and footers in the PDF pages - these pattterns when detected are skipped i.e. headers and footers are ignored/discarded
+*   ITEM pattern: The item pattern is used to identfy the lines that contain (item,unit_price,cutoff) tuples. These lines are parsed, transformed, and copied as a row with multiple columns
+The code also detects the various Sections under which the payload lines occur. 
