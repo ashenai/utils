@@ -1,6 +1,11 @@
 """
 Copyright 2024 Aravind K Shenai
 
+WARNING: This code was generated using artificial intelligence (AI) tools. 
+AI-generated code may contain errors, bugs, or unexpected behaviors that could cause 
+system failures, data loss, or other issues. Use this code at your own risk. 
+No warranty or indemnity is provided for the use of this AI-generated code.
+
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -19,6 +24,73 @@ import pandas as pd
 import pdfplumber
 import sys
 import os
+import json
+
+def load_config():
+    """Load configuration from pdf2excel.config file"""
+    config_path = os.path.join(os.path.dirname(__file__), 'pdf2excel.config')
+    
+    if not os.path.exists(config_path):
+        print("\nError: Configuration file not found!")
+        print(f"Please create a file named 'pdf2excel.config' in the same directory as this script: {os.path.dirname(__file__)}")
+        print("\nThe config file should be a text file with the following structure:")
+        print("""
+# Header patterns - one per line
+[HEADER]
+pattern1
+pattern2
+
+# Footer patterns - one per line
+[FOOTER]
+pattern1
+pattern2
+
+# Item line pattern - single line
+[ITEM]
+your_item_pattern
+        """)
+        sys.exit(1)
+    
+    try:
+        config = {
+            'header_patterns': [],
+            'footer_patterns': [],
+            'item_line_pattern': None
+        }
+        
+        current_section = None
+        with open(config_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                    
+                if line == '[HEADER]':
+                    current_section = 'header_patterns'
+                elif line == '[FOOTER]':
+                    current_section = 'footer_patterns'
+                elif line == '[ITEM]':
+                    current_section = 'item_line_pattern'
+                elif current_section == 'item_line_pattern':
+                    config['item_line_pattern'] = line
+                elif current_section in ['header_patterns', 'footer_patterns']:
+                    config[current_section].append(line)
+        
+        # Validate required fields
+        if not config['header_patterns']:
+            print("\nError: No header patterns found in config file!")
+            sys.exit(1)
+        if not config['footer_patterns']:
+            print("\nError: No footer patterns found in config file!")
+            sys.exit(1)
+        if not config['item_line_pattern']:
+            print("\nError: No item line pattern found in config file!")
+            sys.exit(1)
+        
+        return config
+    except Exception as e:
+        print(f"\nError reading configuration file: {str(e)}")
+        sys.exit(1)
 
 # Function to extract data from the PDF
 def extract_data_from_pdf(pdf_path):
@@ -30,25 +102,16 @@ def extract_data_from_pdf(pdf_path):
     pending_item = None  # Store the current item being processed
     pending_description_lines = []  # Store all text lines between items
     
-    # Patterns for header and footer to ignore
-    header_patterns = [
-        r"KB Home Lone Star Inc\., a Texas corporation",
-        r"Salerno 45's 868290",
-        r"All Plan Options with Prices",
-        r"Options Available for Plan 7D \(134\.1655\) March 30, 2025",
-        r"OPTION SELECTIONS Sales Office Option Cut-Off Unit Price"
-    ]
-    footer_patterns = [
-        r"Prices and availability of option selections are subject to change\.",
-        r"Page \d+ of 15"
-    ]
+    # Load configuration
+    config = load_config()
+    
+    # Get patterns from config
+    header_patterns = config['header_patterns']
+    footer_patterns = config['footer_patterns']
+    item_line_pattern = config['item_line_pattern']
     
     # Combine all patterns to ignore
     ignore_patterns = header_patterns + footer_patterns
-    
-    # Updated pattern to match item, cutoff, and price on the same line
-    # Format: <item text> A $price
-    item_line_pattern = r"^(.*?)\s+A\s+(\$[\d,]+(?:\.\d{2})?|Included|N/C|TBD)\s*$"
     
     def save_pending_item():
         """Helper function to save the pending item with any accumulated description"""
