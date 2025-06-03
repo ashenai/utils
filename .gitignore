@@ -1,0 +1,10 @@
+cloud_updates_scraper/~$cloud_updates.xlsx
+cloud_updates_scraper/cloud_updates.xlsx
+cloud_updates_scraper/corrupted_test_cloud_updates.xlsx
+cloud_updates_scraper/main.py.bak
+cloud_updates_scraper/main.py.new
+cloud_updates_scraper/test_cloud_updates.xlsx
+cloud_updates_scraper/__pycache__/excel_writer.cpython-313.pyc
+cloud_updates_scraper/__pycache__/js_scraper.cpython-313.pyc
+cloud_updates_scraper/__pycache__/scraper.cpython-313.pyc
+cloud_updates_scraper/__pycache__/js_support.cpython-313.pyc
